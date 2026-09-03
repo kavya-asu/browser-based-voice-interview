@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Browser Voice Interview</title>
+    <link rel="stylesheet" href="transformers-lab.css" />
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/bundle.min.js"></script>
+  </head>
+  <body>
+    <main class="app">
+      <section class="voice-panel" aria-label="Browser voice interview">
+        <div class="status-row">
+          <span id="conversation-state" class="state">idle</span>
+          <span id="stt-state" class="state">stt idle</span>
+          <span id="tts-state" class="state">tts idle</span>
+        </div>
+
+        <div class="workspace">
+          <section class="voice-console" aria-label="Voice controls">
+            <button id="record" class="mic-button" type="button" aria-label="Start voice detection">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 15a4 4 0 0 0 4-4V6a4 4 0 0 0-8 0v5a4 4 0 0 0 4 4Z" />
+                <path d="M19 11a7 7 0 0 1-14 0" />
+                <path d="M12 18v4" />
+                <path d="M8 22h8" />
+              </svg>
+            </button>
+
+            <div id="recording-time" class="timer">00:00</div>
+
+            <section class="audio-panel" aria-label="TTS playback">
+              <canvas id="tts-waveform" width="900" height="96"></canvas>
+              <audio id="tts-audio"></audio>
+            </section>
+
+            <section class="transcript-panel" aria-label="Transcript">
+              <ol id="log" class="chat-log"></ol>
+              <textarea id="transcript" readonly placeholder="Transcript will appear here"></textarea>
+              <p id="stt-timing" class="metric">No transcription yet</p>
+            </section>
+          </section>
+
+          <aside class="side-panel" aria-label="Settings and latency">
+            <section class="latency-panel" aria-label="Audio stats">
+              <h2>Audio Stats</h2>
+              <dl class="stats-grid">
+                <div><dt>VAD wait</dt><dd id="stat-vad-wait">0.0s</dd></div>
+                <div><dt>Speech</dt><dd id="stat-speech">0.0s</dd></div>
+                <div><dt>VAD end</dt><dd id="stat-vad-end">0.0s</dd></div>
+                <div><dt>STT</dt><dd id="stat-stt">0.0s</dd></div>
+                <div><dt>TTS start</dt><dd id="stat-tts-start">0.0s</dd></div>
+                <div><dt>TTS speak</dt><dd id="stat-tts-speak">0.0s</dd></div>
+              </dl>
+            </section>
+
+            <details class="settings" open>
+              <summary>Settings</summary>
+              <div class="settings-grid">
+                <label>
+                  STT model
+                  <select id="stt-model">
+                    <option value="onnx-community/whisper-tiny">whisper-tiny · fastest</option>
+                    <option value="onnx-community/whisper-base">whisper-base · balanced</option>
+                    <option value="onnx-community/whisper-small">whisper-small · heavier</option>
+                    <option value="onnx-community/whisper-medium_timestamped">whisper-medium · very heavy</option>
+                  </select>
+                </label>
+                <label>
+                  Runtime
+                  <select id="runtime">
+                    <option value="wasm">WASM CPU</option>
+                    <option value="auto">Auto</option>
+                    <option value="webgpu">WebGPU</option>
+                  </select>
+                </label>
+                <label>
+                  TTS engine
+                  <select id="tts-engine">
+                    <option value="speech">Browser SpeechSynthesis · fastest</option>
+                    <option value="kokoro">Kokoro ONNX · neural</option>
+                  </select>
+                </label>
+                <label id="kokoro-voice-field">
+                  TTS voice
+                  <select id="tts-voice">
+                    <option value="af_heart">Heart</option>
+                    <option value="af_bella">Bella</option>
+                    <option value="af_nicole">Nicole</option>
+                    <option value="af_sarah">Sarah</option>
+                    <option value="af_sky">Sky</option>
+                    <option value="am_adam">Adam</option>
+                    <option value="am_michael">Michael</option>
+                    <option value="bf_emma">Emma</option>
+                    <option value="bm_george">George</option>
+                  </select>
+                </label>
+                <label id="browser-voice-field">
+                  Browser voice
+                  <select id="browser-voice"></select>
+                </label>
+              </div>
+            </details>
+          </aside>
+        </div>
+
+        <div class="hidden-controls">
+          <select id="capture-mode"><option value="vad">Silero VAD</option></select>
+          <input id="tts-model" value="onnx-community/Kokoro-82M-ONNX" />
+          <textarea id="tts-text">Hello. This voice was generated locally in the browser.</textarea>
+          <label><input id="auto-reply" type="checkbox" checked /> auto reply</label>
+          <button id="load-models" type="button">Load models</button>
+          <button id="speak" type="button">Speak text</button>
+          <button id="stop-audio" type="button">Stop audio</button>
+          <button id="clear-log" type="button">Clear log</button>
+        </div>
+
+        <pre id="error-box" class="error-box" hidden></pre>
+      </section>
+    </main>
+
+    <script type="module" src="transformers-lab.js"></script>
+  </body>
+</html>
