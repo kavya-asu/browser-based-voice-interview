@@ -10,6 +10,9 @@ Static browser demo for a voice interview flow.
 - Runs Whisper STT in the background and shows the transcript when ready.
 - Uses Browser SpeechSynthesis by default for low-latency TTS.
 - Keeps Kokoro ONNX available as an optional TTS engine.
+- Uses safe defaults: whisper-tiny, WASM CPU, Browser SpeechSynthesis, and an en-US browser voice.
+- Shows an inline warning when heavier STT models, WebGPU, Auto runtime, Kokoro, or Safari are used.
+- Includes a restart button that reloads the page and releases the active browser session memory.
 - Does not upload or persist user recordings; audio is held in memory only long enough for browser transcription.
 
 ## Files

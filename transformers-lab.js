@@ -5,6 +5,11 @@ import { KokoroTTS } from "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm";
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 
+const browserInfo = {
+  isSafari: /^((?!chrome|android).)*safari/i.test(navigator.userAgent),
+  hasWebGpu: "gpu" in navigator,
+};
+
 const $ = (/** @type {string} */ selector) => {
   const el = document.querySelector(selector);
   if (!el) throw new Error(`Missing element: ${selector}`);
@@ -24,6 +29,7 @@ const loadModelsButton = /** @type {HTMLButtonElement} */ ($("#load-models"));
 const speakButton = /** @type {HTMLButtonElement} */ ($("#speak"));
 const stopAudioButton = /** @type {HTMLButtonElement} */ ($("#stop-audio"));
 const recordButton = /** @type {HTMLButtonElement} */ ($("#record"));
+const restartButton = /** @type {HTMLButtonElement} */ ($("#restart"));
 const clearLogButton = /** @type {HTMLButtonElement} */ ($("#clear-log"));
 const autoReply = /** @type {HTMLInputElement} */ ($("#auto-reply"));
 const ttsText = /** @type {HTMLTextAreaElement} */ ($("#tts-text"));
@@ -41,6 +47,7 @@ const statVadEnd = /** @type {HTMLElement} */ ($("#stat-vad-end"));
 const statStt = /** @type {HTMLElement} */ ($("#stat-stt"));
 const statTtsStart = /** @type {HTMLElement} */ ($("#stat-tts-start"));
 const statTtsSpeak = /** @type {HTMLElement} */ ($("#stat-tts-speak"));
+const settingsWarning = /** @type {HTMLElement} */ ($("#settings-warning"));
 const log = /** @type {HTMLOListElement} */ ($("#log"));
 const errorBox = /** @type {HTMLPreElement} */ ($("#error-box"));
 
@@ -69,6 +76,7 @@ let startedAt = 0;
 let lastRecordingSeconds = 0;
 let lastTranscriptionSeconds = 0;
 let transcribedCurrentRecording = false;
+let interviewStarting = false;
 let interviewStarted = false;
 let questionIndex = 0;
 let interviewComplete = false;
@@ -93,6 +101,9 @@ const INTERVIEW_CLOSING = "Thank you. That completes the interview.";
 function setState(el, text, kind = "") {
   el.textContent = text;
   el.className = `state ${kind}`.trim();
+  if (el === conversationState) {
+    document.body.dataset.conversation = kind === "busy" ? "active" : text;
+  }
 }
 
 function clearError() {
@@ -101,13 +112,22 @@ function clearError() {
 }
 
 function showError(error) {
-  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  const raw = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  let message = raw;
+  if (/webgpu|out of memory|gpu adapter|no available backend/i.test(raw)) {
+    message = `${raw}\n\nSwitched back to the safer browser demo path. Use WASM CPU and Browser SpeechSynthesis for reliable testing.`;
+    runtime.value = "wasm";
+    ttsEngine.value = "speech";
+    syncTtsSettings();
+  } else if (/failed to fetch/i.test(raw)) {
+    message = `${raw}\n\nA model/runtime file could not be downloaded. Refresh once, check network access, then use whisper-tiny with WASM CPU.`;
+  }
   errorBox.textContent = message;
   errorBox.hidden = false;
 }
 
 function setBusy(busy) {
-  for (const button of [loadModelsButton, speakButton, recordButton]) {
+  for (const button of [loadModelsButton, speakButton]) {
     button.disabled = busy;
   }
 }
@@ -134,6 +154,21 @@ function drawIdleWaveform() {
   const { width, height } = ttsWaveform;
   ctx.clearRect(0, 0, width, height);
   ctx.strokeStyle = "rgba(154, 163, 178, 0.35)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, height / 2);
+  ctx.lineTo(width, height / 2);
+  ctx.stroke();
+}
+
+function drawListeningLine() {
+  const ctx = ttsWaveform.getContext("2d");
+  if (!ctx) return;
+  if (waveformFrameId) cancelAnimationFrame(waveformFrameId);
+  waveformFrameId = undefined;
+  const { width, height } = ttsWaveform;
+  ctx.clearRect(0, 0, width, height);
+  ctx.strokeStyle = "rgba(67, 211, 255, 0.7)";
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(0, height / 2);
@@ -184,13 +219,18 @@ function stopWaveform() {
 }
 
 function setCaptureButton() {
+  if (interviewStarting) {
+    recordButton.textContent = "Stop interview";
+    recordButton.disabled = false;
+    return;
+  }
   if (!interviewStarted || interviewComplete) {
     recordButton.textContent = "Start interview";
     recordButton.disabled = false;
     return;
   }
   if (captureMode.value === "vad") {
-    recordButton.textContent = vadListening ? "Stop VAD" : "Start VAD";
+    recordButton.textContent = vadListening ? "Stop interview" : "Start interview";
   }
 }
 
@@ -199,6 +239,28 @@ function syncTtsSettings() {
   kokoroVoiceField.hidden = !useKokoro;
   browserVoiceField.hidden = useKokoro;
   setState(ttsState, useKokoro ? "kokoro" : "browser tts", "ok");
+  updateSettingsWarning();
+}
+
+function updateSettingsWarning() {
+  const warnings = [];
+  if (sttModel.value !== "onnx-community/whisper-tiny") {
+    warnings.push("Larger Whisper models can improve accuracy but need more memory and may add lag.");
+  }
+  if (runtime.value === "webgpu") {
+    warnings.push("WebGPU is experimental and may fail or run out of memory on some browsers.");
+  }
+  if (runtime.value === "auto") {
+    warnings.push("Auto runtime may choose a heavier path. WASM CPU is the safest demo setting.");
+  }
+  if (ttsEngine.value === "kokoro") {
+    warnings.push("Kokoro has higher voice quality but heavier browser loading and higher TTS latency.");
+  }
+  if (browserInfo.isSafari) {
+    warnings.push("Safari has limited support for this browser AI stack. Chrome/Chromium is recommended.");
+  }
+  settingsWarning.textContent = warnings.join(" ");
+  settingsWarning.hidden = warnings.length === 0;
 }
 
 function runtimeOptions() {
@@ -242,6 +304,7 @@ async function ensureStt() {
 async function ensureModels() {
   setBusy(true);
   clearError();
+  updateSettingsWarning();
   try {
     await Promise.all([ttsEngine.value === "kokoro" ? ensureTts() : Promise.resolve(), ensureStt()]);
   } catch (error) {
@@ -308,6 +371,10 @@ function speakWithBrowser(text, requestedAt = performance.now()) {
     };
     utterance.onerror = (event) => {
       stopWaveform();
+      if (event.error === "interrupted" || event.error === "canceled") {
+        resolve();
+        return;
+      }
       reject(new Error(`SpeechSynthesis failed: ${event.error}`));
     };
     window.speechSynthesis.speak(utterance);
@@ -326,6 +393,7 @@ function loadBrowserVoices() {
   }
   const preferred =
     voices.find((voice) => voice.voiceURI === current) ||
+    voices.find((voice) => voice.lang.toLowerCase() === "en-us" && voice.name.toLowerCase().includes("google")) ||
     voices.find((voice) => voice.lang.toLowerCase() === "en-us") ||
     voices.find((voice) => voice.lang.toLowerCase().startsWith("en-us")) ||
     voices.find((voice) => voice.lang.toLowerCase().startsWith("en"));
@@ -389,11 +457,24 @@ function writeString(view, offset, text) {
 
 async function startVad() {
   clearError();
-  await ensureVad();
-  if (!interviewStarted || interviewComplete) {
-    await startInterview();
+  updateSettingsWarning();
+  const shouldStartNewInterview = !interviewStarted || interviewComplete;
+  interviewStarting = true;
+  interviewComplete = false;
+  setCaptureButton();
+  try {
+    await ensureVad();
+    if (shouldStartNewInterview) {
+      await startInterview();
+    }
+    vadListening = true;
+    interviewStarting = false;
+    setCaptureButton();
+  } catch (error) {
+    interviewStarting = false;
+    setCaptureButton();
+    throw error;
   }
-  vadListening = true;
   startedAt = Date.now();
   vadListenStartedAt = performance.now();
   lastTurnStartedAt = vadListenStartedAt;
@@ -401,10 +482,28 @@ async function startVad() {
   lastVadSegmentSeconds = 0;
   lastVadEndDelaySeconds = 0;
   timerId = window.setInterval(updateTimer, 250);
-  setCaptureButton();
   setState(sttState, "vad listening", "busy");
   setState(conversationState, "waiting for speech", "busy");
+  drawListeningLine();
   await micVad.start();
+}
+
+async function stopInterview() {
+  interviewStarting = false;
+  window.speechSynthesis?.cancel();
+  ttsAudio.pause();
+  ttsAudio.currentTime = 0;
+  if (micVad) await micVad.pause();
+  vadListening = false;
+  interviewStarted = false;
+  interviewComplete = false;
+  window.clearInterval(timerId);
+  recordingTime.textContent = "00:00";
+  setCaptureButton();
+  setState(sttState, "ready", "ok");
+  setState(ttsState, "ready", "ok");
+  setState(conversationState, "stopped", "ok");
+  drawIdleWaveform();
 }
 
 async function stopVad() {
@@ -416,6 +515,7 @@ async function stopVad() {
   setCaptureButton();
   setState(sttState, "ready", "ok");
   setState(conversationState, "ready", "ok");
+  drawIdleWaveform();
 }
 
 async function ensureVad() {
@@ -439,10 +539,12 @@ async function ensureVad() {
       lastVadWaitSeconds = vadListenStartedAt ? (vadSpeechStartedAt - vadListenStartedAt) / 1000 : 0;
       setState(sttState, "speech detected", "busy");
       setState(conversationState, "hearing speech", "busy");
+      drawListeningLine();
     },
     onVADMisfire: () => {
       setState(sttState, "vad listening", "busy");
       setState(conversationState, "waiting for speech", "busy");
+      drawListeningLine();
     },
     onSpeechEnd: (audio) => {
       handleVadSpeechEnd(audio).catch((error) => {
@@ -458,6 +560,7 @@ async function ensureVad() {
 async function handleVadSpeechEnd(audio) {
   const shouldResumeVad = vadListening;
   if (micVad && vadListening) await micVad.pause();
+  drawListeningLine();
   lastWaveform = audio;
   lastRecordingSeconds = audio.length / 16000;
   transcribedCurrentRecording = false;
@@ -490,10 +593,12 @@ async function handleVadSpeechEnd(audio) {
     await micVad.start();
     setState(sttState, "vad listening", "busy");
     setState(conversationState, "waiting for speech", "busy");
+    drawListeningLine();
   } else if (interviewComplete) {
     await micVad?.pause();
     setState(sttState, "ready", "ok");
     setState(conversationState, "complete", "ok");
+    drawIdleWaveform();
   }
 }
 
@@ -557,6 +662,7 @@ async function transcribe(waveform, { background = false } = {}) {
 
 function addLog(role, text) {
   const item = document.createElement("li");
+  item.className = role.toLowerCase();
   item.innerHTML = `<strong>${role}:</strong> ${escapeHtml(text)}`;
   log.append(item);
   log.scrollTop = log.scrollHeight;
@@ -564,6 +670,7 @@ function addLog(role, text) {
 }
 
 function updateLogItem(item, role, text) {
+  item.className = role.toLowerCase();
   item.innerHTML = `<strong>${role}:</strong> ${escapeHtml(text)}`;
   log.scrollTop = log.scrollHeight;
 }
@@ -602,6 +709,7 @@ function formatSeconds(seconds) {
 }
 
 loadModelsButton.addEventListener("click", () => ensureModels().catch(console.error));
+restartButton.addEventListener("click", () => window.location.reload());
 speakButton.addEventListener("click", () => speak(ttsText.value).catch(console.error));
 stopAudioButton.addEventListener("click", () => {
   ttsAudio.pause();
@@ -614,8 +722,8 @@ ttsAudio.addEventListener("pause", stopWaveform);
 ttsAudio.addEventListener("ended", stopWaveform);
 recordButton.addEventListener("click", () => {
   if (captureMode.value === "vad") {
-    if (vadListening) {
-      stopVad().catch(console.error);
+    if (vadListening || interviewStarting) {
+      stopInterview().catch(console.error);
     } else {
       startVad().catch((error) => {
         showError(error);
@@ -633,11 +741,14 @@ captureMode.addEventListener("change", () => {
 });
 clearLogButton.addEventListener("click", () => log.replaceChildren());
 ttsEngine.addEventListener("change", syncTtsSettings);
+sttModel.addEventListener("change", updateSettingsWarning);
+runtime.addEventListener("change", updateSettingsWarning);
 if ("speechSynthesis" in window) {
   loadBrowserVoices();
   window.speechSynthesis.addEventListener("voiceschanged", loadBrowserVoices);
 }
 setCaptureButton();
 syncTtsSettings();
+updateSettingsWarning();
 updateStats({ vadWait: 0, speech: 0, vadEnd: 0, stt: 0, ttsStart: 0, ttsSpeak: 0 });
 drawIdleWaveform();

@@ -11,6 +11,11 @@
   <body>
     <main class="app">
       <section class="voice-panel" aria-label="Browser voice interview">
+        <header class="page-header">
+          <h1>Voice Assignment Review</h1>
+          <p class="preamble">Click Start interview to begin a short voice-based assignment review. You can stop or restart at any time.</p>
+        </header>
+
         <div class="status-row">
           <span id="conversation-state" class="state">idle</span>
           <span id="stt-state" class="state">stt idle</span>
@@ -29,6 +34,7 @@
             </button>
 
             <div id="recording-time" class="timer">00:00</div>
+            <button id="restart" class="restart-button" type="button">Restart</button>
 
             <section class="audio-panel" aria-label="TTS playback">
               <canvas id="tts-waveform" width="900" height="96"></canvas>
@@ -44,19 +50,20 @@
 
           <aside class="side-panel" aria-label="Settings and latency">
             <section class="latency-panel" aria-label="Audio stats">
-              <h2>Audio Stats</h2>
+              <h2>Session Metrics</h2>
               <dl class="stats-grid">
-                <div><dt>VAD wait</dt><dd id="stat-vad-wait">0.0s</dd></div>
-                <div><dt>Speech</dt><dd id="stat-speech">0.0s</dd></div>
-                <div><dt>VAD end</dt><dd id="stat-vad-end">0.0s</dd></div>
-                <div><dt>STT</dt><dd id="stat-stt">0.0s</dd></div>
-                <div><dt>TTS start</dt><dd id="stat-tts-start">0.0s</dd></div>
-                <div><dt>TTS speak</dt><dd id="stat-tts-speak">0.0s</dd></div>
+                <div><dt>Wait time</dt><dd id="stat-vad-wait">0.0s</dd></div>
+                <div><dt>Response length</dt><dd id="stat-speech">0.0s</dd></div>
+                <div><dt>End detection</dt><dd id="stat-vad-end">0.0s</dd></div>
+                <div><dt>Transcription</dt><dd id="stat-stt">0.0s</dd></div>
+                <div><dt>Voice start</dt><dd id="stat-tts-start">0.0s</dd></div>
+                <div><dt>Voice duration</dt><dd id="stat-tts-speak">0.0s</dd></div>
               </dl>
             </section>
 
-            <details class="settings" open>
-              <summary>Settings</summary>
+            <details class="settings">
+              <summary>Advanced Settings</summary>
+              <p id="settings-warning" class="settings-warning" hidden></p>
               <div class="settings-grid">
                 <label>
                   STT model
