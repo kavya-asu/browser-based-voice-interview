@@ -49,6 +49,7 @@ const statTtsStart = /** @type {HTMLElement} */ ($("#stat-tts-start"));
 const statTtsSpeak = /** @type {HTMLElement} */ ($("#stat-tts-speak"));
 const settingsWarning = /** @type {HTMLElement} */ ($("#settings-warning"));
 const log = /** @type {HTMLOListElement} */ ($("#log"));
+const noticeBox = /** @type {HTMLPreElement} */ ($("#notice-box"));
 const errorBox = /** @type {HTMLPreElement} */ ($("#error-box"));
 
 /** @type {any} */
@@ -64,6 +65,7 @@ let lastWaveform = null;
 /** @type {any} */
 let micVad = null;
 let vadListening = false;
+let vadHandlingTurn = false;
 let vadSpeechStartedAt = 0;
 let vadListenStartedAt = 0;
 let lastVadWaitSeconds = 0;
@@ -76,6 +78,7 @@ let startedAt = 0;
 let lastRecordingSeconds = 0;
 let lastTranscriptionSeconds = 0;
 let transcribedCurrentRecording = false;
+let microphonePrepared = false;
 let interviewStarting = false;
 let interviewStarted = false;
 let questionIndex = 0;
@@ -88,6 +91,11 @@ let playbackSourceConnected = false;
 /** @type {number | undefined} */
 let waveformFrameId;
 let lastTtsStartDelaySeconds = 0;
+let voiceLoadAttempts = 0;
+/** @type {boolean | null} */
+let browserVoicesAvailable = null;
+/** @type {number | undefined} */
+let ttsProgressTimer;
 
 const INTERVIEW_INTRO =
   "Thank you for submitting your assignment. I'm going to ask you three questions about your submission. Please answer each question through voice.";
@@ -111,6 +119,16 @@ function clearError() {
   errorBox.textContent = "";
 }
 
+function showNotice(message) {
+  noticeBox.textContent = message;
+  noticeBox.hidden = false;
+}
+
+function clearNotice() {
+  noticeBox.hidden = true;
+  noticeBox.textContent = "";
+}
+
 function showError(error) {
   const raw = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   let message = raw;
@@ -130,6 +148,19 @@ function setBusy(busy) {
   for (const button of [loadModelsButton, speakButton]) {
     button.disabled = busy;
   }
+}
+
+function startTtsProgress(label, started = performance.now()) {
+  window.clearInterval(ttsProgressTimer);
+  showNotice(`${label} 0.0s`);
+  ttsProgressTimer = window.setInterval(() => {
+    showNotice(`${label} ${((performance.now() - started) / 1000).toFixed(1)}s`);
+  }, 250);
+}
+
+function stopTtsProgress() {
+  window.clearInterval(ttsProgressTimer);
+  ttsProgressTimer = undefined;
 }
 
 function updateStats({
@@ -224,14 +255,18 @@ function setCaptureButton() {
     recordButton.disabled = false;
     return;
   }
+  if (!microphonePrepared) {
+    recordButton.textContent = "Prepare microphone";
+    recordButton.disabled = false;
+    return;
+  }
   if (!interviewStarted || interviewComplete) {
     recordButton.textContent = "Start interview";
     recordButton.disabled = false;
     return;
   }
-  if (captureMode.value === "vad") {
-    recordButton.textContent = vadListening ? "Stop interview" : "Start interview";
-  }
+  recordButton.textContent = "Stop interview";
+  recordButton.disabled = false;
 }
 
 function syncTtsSettings() {
@@ -275,11 +310,19 @@ async function ensureTts() {
   const runKey = runtime.value;
 
   if (!ttsPipe || loadedTtsKey !== ttsKey || loadedTtsRuntime !== runKey) {
-    setState(ttsState, "loading", "busy");
-    ttsPipe = await KokoroTTS.from_pretrained(ttsKey, kokoroOptions());
+    const started = performance.now();
+    startTtsProgress("Loading Kokoro voice model...");
+    setState(ttsState, "loading kokoro", "busy");
+    setState(conversationState, "loading voice", "busy");
+    try {
+      ttsPipe = await KokoroTTS.from_pretrained(ttsKey, kokoroOptions());
+    } finally {
+      stopTtsProgress();
+    }
     loadedTtsKey = ttsKey;
     loadedTtsRuntime = runKey;
     setState(ttsState, "ready", "ok");
+    showNotice(`Kokoro voice model ready in ${((performance.now() - started) / 1000).toFixed(1)}s.`);
   }
 }
 
@@ -322,6 +365,7 @@ async function speak(text) {
   const cleanText = text.trim();
   if (!cleanText) return;
 
+  await useKokoroIfBrowserVoicesMissing();
   setBusy(true);
   setState(ttsState, ttsEngine.value === "kokoro" ? "generating" : "speaking", "busy");
   try {
@@ -333,15 +377,23 @@ async function speak(text) {
     }
 
     await ensureTts();
+    const generatedAt = performance.now();
+    startTtsProgress("Generating Kokoro speech...");
+    setState(ttsState, "generating kokoro", "busy");
+    setState(conversationState, "generating voice", "busy");
     const audio = await ttsPipe.generate(cleanText, { voice: ttsVoice.value });
+    stopTtsProgress();
     lastTtsStartDelaySeconds = (performance.now() - started) / 1000;
     const blob = audio?.toBlob ? await audio.toBlob() : wavBlob(audio.audio ?? audio, audio.sampling_rate ?? 24000);
     URL.revokeObjectURL(ttsAudio.src);
     ttsAudio.src = URL.createObjectURL(blob);
+    showNotice(`Kokoro speech generated in ${((performance.now() - generatedAt) / 1000).toFixed(1)}s. Playing audio now.`);
     await ttsAudio.play();
+    clearNotice();
     setState(ttsState, "speaking", "ok");
     return (performance.now() - started) / 1000;
   } catch (error) {
+    stopTtsProgress();
     showError(error);
     setState(ttsState, "error", "error");
     throw error;
@@ -361,15 +413,18 @@ function speakWithBrowser(text, requestedAt = performance.now()) {
     if (selected) utterance.voice = selected;
     utterance.rate = 1;
     utterance.pitch = 1;
+    const resumeTimer = window.setInterval(() => window.speechSynthesis.resume(), 250);
     utterance.onstart = () => {
       lastTtsStartDelaySeconds = (performance.now() - requestedAt) / 1000;
       startSyntheticWaveform();
     };
     utterance.onend = () => {
+      window.clearInterval(resumeTimer);
       stopWaveform();
       resolve();
     };
     utterance.onerror = (event) => {
+      window.clearInterval(resumeTimer);
       stopWaveform();
       if (event.error === "interrupted" || event.error === "canceled") {
         resolve();
@@ -378,10 +433,21 @@ function speakWithBrowser(text, requestedAt = performance.now()) {
       reject(new Error(`SpeechSynthesis failed: ${event.error}`));
     };
     window.speechSynthesis.speak(utterance);
+    window.speechSynthesis.resume();
   });
 }
 
+function unlockBrowserSpeech() {
+  if (!("speechSynthesis" in window)) return;
+  const utterance = new SpeechSynthesisUtterance(" ");
+  utterance.volume = 0.01;
+  utterance.rate = 1;
+  window.speechSynthesis.speak(utterance);
+  window.speechSynthesis.resume();
+}
+
 function loadBrowserVoices() {
+  if (!("speechSynthesis" in window)) return [];
   const voices = speechSynthesis.getVoices();
   const current = browserVoice.value;
   browserVoice.replaceChildren();
@@ -398,6 +464,55 @@ function loadBrowserVoices() {
     voices.find((voice) => voice.lang.toLowerCase().startsWith("en-us")) ||
     voices.find((voice) => voice.lang.toLowerCase().startsWith("en"));
   if (preferred) browserVoice.value = preferred.voiceURI;
+  if (voices.length > 0) browserVoicesAvailable = true;
+  return voices;
+}
+
+function loadBrowserVoicesWhenAvailable(onComplete = () => {}) {
+  const voices = loadBrowserVoices();
+  if (voices.length > 0 || voiceLoadAttempts >= 50) {
+    onComplete(voices);
+    return;
+  }
+  voiceLoadAttempts += 1;
+  window.setTimeout(() => loadBrowserVoicesWhenAvailable(onComplete), 100);
+}
+
+function waitForBrowserVoices() {
+  return new Promise((resolve) => {
+    voiceLoadAttempts = 0;
+    loadBrowserVoicesWhenAvailable(resolve);
+  });
+}
+
+async function useKokoroIfBrowserVoicesMissing() {
+  if (ttsEngine.value !== "speech") return;
+  if (browserVoicesAvailable === true) {
+    clearNotice();
+    return;
+  }
+  if (browserVoicesAvailable === false) {
+    ttsEngine.value = "kokoro";
+    syncTtsSettings();
+    return;
+  }
+  if (!("speechSynthesis" in window)) {
+    browserVoicesAvailable = false;
+    ttsEngine.value = "kokoro";
+    syncTtsSettings();
+    showNotice("Browser SpeechSynthesis is not available here. Using Kokoro fallback. First load may take 10-30 seconds.");
+    return;
+  }
+  const voices = await waitForBrowserVoices();
+  if (voices.length > 0) {
+    browserVoicesAvailable = true;
+    clearNotice();
+    return;
+  }
+  browserVoicesAvailable = false;
+  ttsEngine.value = "kokoro";
+  syncTtsSettings();
+  showNotice("No browser TTS voices found. Using Kokoro fallback. First load may take 10-30 seconds, then generated audio will play through the browser.");
 }
 
 function startSyntheticWaveform() {
@@ -455,26 +570,33 @@ function writeString(view, offset, text) {
   for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
 }
 
-async function startVad() {
+async function prepareMicrophone() {
   clearError();
   updateSettingsWarning();
-  const shouldStartNewInterview = !interviewStarted || interviewComplete;
   interviewStarting = true;
-  interviewComplete = false;
   setCaptureButton();
   try {
+    setState(sttState, "preparing mic", "busy");
+    setState(conversationState, "preparing", "busy");
     await ensureVad();
-    if (shouldStartNewInterview) {
-      await startInterview();
-    }
-    vadListening = true;
+    microphonePrepared = true;
     interviewStarting = false;
     setCaptureButton();
+    setState(sttState, "ready", "ok");
+    setState(conversationState, "ready", "ok");
+    drawIdleWaveform();
   } catch (error) {
     interviewStarting = false;
     setCaptureButton();
     throw error;
   }
+}
+
+async function beginVadListening() {
+  if (!micVad) await ensureVad();
+  if (interviewComplete || !interviewStarted) return;
+  vadListening = true;
+  setCaptureButton();
   startedAt = Date.now();
   vadListenStartedAt = performance.now();
   lastTurnStartedAt = vadListenStartedAt;
@@ -488,8 +610,31 @@ async function startVad() {
   await micVad.start();
 }
 
+async function startVad() {
+  if (!microphonePrepared) {
+    await prepareMicrophone();
+    return;
+  }
+  clearError();
+  updateSettingsWarning();
+  interviewStarting = true;
+  interviewComplete = false;
+  setCaptureButton();
+  try {
+    unlockBrowserSpeech();
+    await startInterview();
+    interviewStarting = false;
+    await beginVadListening();
+  } catch (error) {
+    interviewStarting = false;
+    setCaptureButton();
+    throw error;
+  }
+}
+
 async function stopInterview() {
   interviewStarting = false;
+  vadHandlingTurn = false;
   window.speechSynthesis?.cancel();
   ttsAudio.pause();
   ttsAudio.currentTime = 0;
@@ -534,6 +679,7 @@ async function ensureVad() {
     redemptionMs: 800,
     preSpeechPadMs: 200,
     onSpeechStart: () => {
+      if (interviewComplete || !interviewStarted || !vadListening) return;
       vadSpeechStartedAt = performance.now();
       lastTurnStartedAt = vadSpeechStartedAt;
       lastVadWaitSeconds = vadListenStartedAt ? (vadSpeechStartedAt - vadListenStartedAt) / 1000 : 0;
@@ -542,11 +688,13 @@ async function ensureVad() {
       drawListeningLine();
     },
     onVADMisfire: () => {
+      if (interviewComplete || !interviewStarted || !vadListening) return;
       setState(sttState, "vad listening", "busy");
       setState(conversationState, "waiting for speech", "busy");
       drawListeningLine();
     },
     onSpeechEnd: (audio) => {
+      if (interviewComplete || !interviewStarted || !vadListening || vadHandlingTurn) return;
       handleVadSpeechEnd(audio).catch((error) => {
         showError(error);
         setState(sttState, "error", "error");
@@ -558,47 +706,56 @@ async function ensureVad() {
 }
 
 async function handleVadSpeechEnd(audio) {
-  const shouldResumeVad = vadListening;
-  if (micVad && vadListening) await micVad.pause();
-  drawListeningLine();
-  lastWaveform = audio;
-  lastRecordingSeconds = audio.length / 16000;
-  transcribedCurrentRecording = false;
-  lastVadSegmentSeconds = vadSpeechStartedAt ? (performance.now() - vadSpeechStartedAt) / 1000 : 0;
-  lastVadEndDelaySeconds = Math.max(0, lastVadSegmentSeconds - lastRecordingSeconds);
-  const answerItem = addLog("You", "Transcribing...");
-  const nextQuestionIndex = advanceInterviewIndex();
-  const isFinalTurn = nextQuestionIndex >= INTERVIEW_QUESTIONS.length;
-  const reply = INTERVIEW_QUESTIONS[nextQuestionIndex] ?? INTERVIEW_CLOSING;
-  if (isFinalTurn) {
-    interviewComplete = true;
-    vadListening = false;
-    window.clearInterval(timerId);
-    recordingTime.textContent = "00:00";
-    setCaptureButton();
-    setState(conversationState, "complete", "ok");
-  }
-  updateStats({ stt: null, ttsStart: 0, ttsSpeak: 0 });
-  sttTiming.textContent = "Transcribing...";
-  transcribeInBackground(audio, answerItem);
-  let ttsSeconds = 0;
-  let botStartedAfterSeconds = 0;
-  if (autoReply.checked) {
-    ttsSeconds = await botSpeak(reply);
-    botStartedAfterSeconds = Math.max(0, lastTtsStartDelaySeconds);
-    updateStats({ stt: null, ttsStart: botStartedAfterSeconds, ttsSpeak: ttsSeconds ?? 0 });
-  }
-  if (shouldResumeVad && !interviewComplete) {
-    vadListenStartedAt = performance.now();
-    await micVad.start();
-    setState(sttState, "vad listening", "busy");
-    setState(conversationState, "waiting for speech", "busy");
+  if (interviewComplete || !interviewStarted || vadHandlingTurn) return;
+  vadHandlingTurn = true;
+  try {
+    const shouldResumeVad = vadListening;
+    if (micVad && vadListening) await micVad.pause();
     drawListeningLine();
-  } else if (interviewComplete) {
-    await micVad?.pause();
-    setState(sttState, "ready", "ok");
-    setState(conversationState, "complete", "ok");
-    drawIdleWaveform();
+    lastWaveform = audio;
+    lastRecordingSeconds = audio.length / 16000;
+    transcribedCurrentRecording = false;
+    lastVadSegmentSeconds = vadSpeechStartedAt ? (performance.now() - vadSpeechStartedAt) / 1000 : 0;
+    lastVadEndDelaySeconds = Math.max(0, lastVadSegmentSeconds - lastRecordingSeconds);
+    const answerItem = addLog("You", "Transcribing...");
+    const nextQuestionIndex = advanceInterviewIndex();
+    const isFinalTurn = nextQuestionIndex >= INTERVIEW_QUESTIONS.length;
+    const reply = INTERVIEW_QUESTIONS[nextQuestionIndex] ?? INTERVIEW_CLOSING;
+    if (isFinalTurn) {
+      interviewComplete = true;
+      vadListening = false;
+      window.clearInterval(timerId);
+      recordingTime.textContent = "00:00";
+      setCaptureButton();
+      setState(conversationState, "complete", "ok");
+    }
+    updateStats({ stt: null, ttsStart: 0, ttsSpeak: 0 });
+    sttTiming.textContent = "Transcribing...";
+    transcribeInBackground(audio, answerItem);
+    let ttsSeconds = 0;
+    let botStartedAfterSeconds = 0;
+    if (autoReply.checked) {
+      ttsSeconds = await botSpeak(reply);
+      botStartedAfterSeconds = Math.max(0, lastTtsStartDelaySeconds);
+      updateStats({ stt: null, ttsStart: botStartedAfterSeconds, ttsSpeak: ttsSeconds ?? 0 });
+    }
+    if (shouldResumeVad && !interviewComplete) {
+      vadListenStartedAt = performance.now();
+      await micVad.start();
+      setState(sttState, "vad listening", "busy");
+      setState(conversationState, "waiting for speech", "busy");
+      drawListeningLine();
+    } else if (interviewComplete) {
+      await micVad?.pause();
+      vadListening = false;
+      interviewStarted = false;
+      setState(sttState, "ready", "ok");
+      setState(conversationState, "complete", "ok");
+      drawIdleWaveform();
+      setCaptureButton();
+    }
+  } finally {
+    vadHandlingTurn = false;
   }
 }
 
@@ -722,7 +879,7 @@ ttsAudio.addEventListener("pause", stopWaveform);
 ttsAudio.addEventListener("ended", stopWaveform);
 recordButton.addEventListener("click", () => {
   if (captureMode.value === "vad") {
-    if (vadListening || interviewStarting) {
+    if (vadListening || interviewStarting || interviewStarted) {
       stopInterview().catch(console.error);
     } else {
       startVad().catch((error) => {
@@ -744,7 +901,7 @@ ttsEngine.addEventListener("change", syncTtsSettings);
 sttModel.addEventListener("change", updateSettingsWarning);
 runtime.addEventListener("change", updateSettingsWarning);
 if ("speechSynthesis" in window) {
-  loadBrowserVoices();
+  loadBrowserVoicesWhenAvailable();
   window.speechSynthesis.addEventListener("voiceschanged", loadBrowserVoices);
 }
 setCaptureButton();
