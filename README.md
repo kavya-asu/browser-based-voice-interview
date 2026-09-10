@@ -1,4 +1,4 @@
-# Browser Voice Interview
+# Oral Assessment POC
 
 Static browser demo for a voice interview flow.
 

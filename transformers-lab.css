@@ -136,9 +136,21 @@ input {
   animation: pulse 1.8s ease-in-out infinite;
 }
 
+.mic-button[data-mode="prepare"] {
+  border-color: color-mix(in srgb, var(--error) 58%, var(--line));
+  background: radial-gradient(circle, rgba(255, 107, 122, 0.22), rgba(255, 107, 122, 0.08) 62%, transparent);
+  box-shadow: 0 0 34px rgba(255, 107, 122, 0.18);
+  animation: none;
+}
+
 body[data-conversation="active"] .mic-button {
   border-color: color-mix(in srgb, var(--processing) 60%, var(--line));
   box-shadow: 0 0 48px rgba(255, 209, 102, 0.22);
+}
+
+body[data-conversation="active"] .mic-button[data-mode="prepare"] {
+  border-color: color-mix(in srgb, var(--error) 58%, var(--line));
+  box-shadow: 0 0 34px rgba(255, 107, 122, 0.18);
 }
 
 .mic-button svg {

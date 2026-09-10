@@ -253,20 +253,24 @@ function setCaptureButton() {
   if (interviewStarting) {
     recordButton.textContent = "Stop interview";
     recordButton.disabled = false;
+    recordButton.dataset.mode = "active";
     return;
   }
   if (!microphonePrepared) {
     recordButton.textContent = "Prepare microphone";
     recordButton.disabled = false;
+    recordButton.dataset.mode = "prepare";
     return;
   }
   if (!interviewStarted || interviewComplete) {
     recordButton.textContent = "Start interview";
     recordButton.disabled = false;
+    recordButton.dataset.mode = "ready";
     return;
   }
   recordButton.textContent = "Stop interview";
   recordButton.disabled = false;
+  recordButton.dataset.mode = "active";
 }
 
 function syncTtsSettings() {
@@ -365,7 +369,7 @@ async function speak(text) {
   const cleanText = text.trim();
   if (!cleanText) return;
 
-  await useKokoroIfBrowserVoicesMissing();
+  useCachedTtsFallback();
   setBusy(true);
   setState(ttsState, ttsEngine.value === "kokoro" ? "generating" : "speaking", "busy");
   try {
@@ -515,6 +519,14 @@ async function useKokoroIfBrowserVoicesMissing() {
   showNotice("No browser TTS voices found. Using Kokoro fallback. First load may take 10-30 seconds, then generated audio will play through the browser.");
 }
 
+function useCachedTtsFallback() {
+  if (ttsEngine.value !== "speech") return;
+  if (browserVoicesAvailable === false || !("speechSynthesis" in window)) {
+    ttsEngine.value = "kokoro";
+    syncTtsSettings();
+  }
+}
+
 function startSyntheticWaveform() {
   const ctx = ttsWaveform.getContext("2d");
   if (!ctx) return;
@@ -579,6 +591,8 @@ async function prepareMicrophone() {
     setState(sttState, "preparing mic", "busy");
     setState(conversationState, "preparing", "busy");
     await ensureVad();
+    await useKokoroIfBrowserVoicesMissing();
+    if (ttsEngine.value === "kokoro") await ensureTts();
     microphonePrepared = true;
     interviewStarting = false;
     setCaptureButton();
@@ -850,14 +864,14 @@ async function startInterview() {
   sttTiming.textContent = "No transcription yet";
   updateStats({ vadWait: 0, speech: 0, vadEnd: 0, stt: 0, ttsStart: 0, ttsSpeak: 0 });
   log.replaceChildren();
-  addLog("Bot", INTERVIEW_INTRO);
-  addLog("Bot", INTERVIEW_QUESTIONS[questionIndex]);
+  addLog("Interviewer", INTERVIEW_INTRO);
+  addLog("Interviewer", INTERVIEW_QUESTIONS[questionIndex]);
   await speak(`${INTERVIEW_INTRO} ${INTERVIEW_QUESTIONS[questionIndex]}`);
   setCaptureButton();
 }
 
 async function botSpeak(text) {
-  addLog("Bot", text);
+  addLog("Interviewer", text);
   return speak(text);
 }
 
