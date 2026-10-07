@@ -83,6 +83,7 @@ let interviewStarting = false;
 let interviewStarted = false;
 let questionIndex = 0;
 let interviewComplete = false;
+let questionsGenerating = false;
 /** @type {AudioContext | null} */
 let playbackContext = null;
 /** @type {AnalyserNode | null} */
@@ -99,11 +100,12 @@ let ttsProgressTimer;
 
 const INTERVIEW_INTRO =
   "Thank you for submitting your assignment. I'm going to ask you three questions about your submission. Please answer each question through voice.";
-const INTERVIEW_QUESTIONS = [
+const DEFAULT_INTERVIEW_QUESTIONS = [
   "Can you briefly explain the approach you used to solve the problem?",
-  "Thank you. Why did you choose this particular approach?",
-  "Thank you. If you had more time to improve your assignment, what would you change?",
+  "Thank you, that's actually helpful in understanding the assignment you submitted. What led you to choose that approach?",
+  "That gives me a clearer picture of your reasoning. If you had more time, what part of the assignment would you improve, and why?",
 ];
+let interviewQuestions = [...DEFAULT_INTERVIEW_QUESTIONS];
 const INTERVIEW_CLOSING = "Thank you. That completes the interview.";
 
 function setState(el, text, kind = "") {
@@ -250,6 +252,12 @@ function stopWaveform() {
 }
 
 function setCaptureButton() {
+  if (questionsGenerating) {
+    recordButton.textContent = "Preparing questions";
+    recordButton.disabled = true;
+    recordButton.dataset.mode = "ready";
+    return;
+  }
   if (interviewStarting) {
     recordButton.textContent = "Stop interview";
     recordButton.disabled = false;
@@ -733,8 +741,8 @@ async function handleVadSpeechEnd(audio) {
     lastVadEndDelaySeconds = Math.max(0, lastVadSegmentSeconds - lastRecordingSeconds);
     const answerItem = addLog("You", "Transcribing...");
     const nextQuestionIndex = advanceInterviewIndex();
-    const isFinalTurn = nextQuestionIndex >= INTERVIEW_QUESTIONS.length;
-    const reply = INTERVIEW_QUESTIONS[nextQuestionIndex] ?? INTERVIEW_CLOSING;
+    const isFinalTurn = nextQuestionIndex >= interviewQuestions.length;
+    const reply = interviewQuestions[nextQuestionIndex] ?? INTERVIEW_CLOSING;
     if (isFinalTurn) {
       interviewComplete = true;
       vadListening = false;
@@ -865,8 +873,8 @@ async function startInterview() {
   updateStats({ vadWait: 0, speech: 0, vadEnd: 0, stt: 0, ttsStart: 0, ttsSpeak: 0 });
   log.replaceChildren();
   addLog("Interviewer", INTERVIEW_INTRO);
-  addLog("Interviewer", INTERVIEW_QUESTIONS[questionIndex]);
-  await speak(`${INTERVIEW_INTRO} ${INTERVIEW_QUESTIONS[questionIndex]}`);
+  addLog("Interviewer", interviewQuestions[questionIndex]);
+  await speak(`${INTERVIEW_INTRO} ${interviewQuestions[questionIndex]}`);
   setCaptureButton();
 }
 
@@ -911,6 +919,19 @@ captureMode.addEventListener("change", () => {
   setCaptureButton();
 });
 clearLogButton.addEventListener("click", () => log.replaceChildren());
+window.addEventListener("assignment-generation-state", (event) => {
+  questionsGenerating = Boolean(event.detail?.generating);
+  setCaptureButton();
+});
+window.addEventListener("assignment-questions-ready", (event) => {
+  const questions = event.detail?.questions;
+  if (Array.isArray(questions) && questions.length === 5) {
+    interviewQuestions = questions;
+  }
+});
+window.addEventListener("assignment-use-default-questions", () => {
+  interviewQuestions = [...DEFAULT_INTERVIEW_QUESTIONS];
+});
 ttsEngine.addEventListener("change", syncTtsSettings);
 sttModel.addEventListener("change", updateSettingsWarning);
 runtime.addEventListener("change", updateSettingsWarning);

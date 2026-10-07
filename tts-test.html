@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Browser TTS Test</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0d1117;
+        color: #f5f7fb;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+      }
+
+      main {
+        width: min(92vw, 680px);
+        display: grid;
+        gap: 18px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.5rem, 4vw, 2.5rem);
+        font-weight: 650;
+      }
+
+      p {
+        margin: 0;
+        color: #aeb8c8;
+        line-height: 1.5;
+      }
+
+      button,
+      select {
+        border: 1px solid #303849;
+        border-radius: 8px;
+        background: #161b24;
+        color: #f5f7fb;
+        font: inherit;
+      }
+
+      button {
+        min-height: 56px;
+        cursor: pointer;
+        background: #0f5eff;
+        border-color: #5f99ff;
+        font-weight: 650;
+      }
+
+      select {
+        min-height: 44px;
+        padding: 0 12px;
+      }
+
+      textarea,
+      pre {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid #303849;
+        border-radius: 8px;
+        background: #070a0f;
+        color: #f5f7fb;
+      }
+
+      textarea {
+        min-height: 96px;
+        padding: 14px;
+        font: inherit;
+        resize: vertical;
+      }
+
+      pre {
+        min-height: 180px;
+        margin: 0;
+        padding: 14px;
+        overflow: auto;
+        white-space: pre-wrap;
+      }
+
+      audio {
+        width: 100%;
+      }
+
+      .links {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      a {
+        color: #8fc3ff;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Browser TTS Test</h1>
+      <p>
+        This page tests TTS engines only. No microphone, no VAD, no Whisper.
+      </p>
+
+      <textarea id="text">Hello, this is a browser text to speech test.</textarea>
+      <select id="engine">
+        <option value="speech">Browser SpeechSynthesis</option>
+        <option value="kokoro">Kokoro ONNX model</option>
+        <option value="piper">Piper TTS WASM model</option>
+        <option value="supertonic">Supertonic external demo</option>
+      </select>
+      <select id="voice"></select>
+      <button id="speak" type="button">Speak test sentence</button>
+      <audio id="audio" controls></audio>
+      <div class="links">
+        <a href="https://huggingface.co/spaces/Supertone/supertonic" target="_blank" rel="noreferrer">Open Supertonic demo</a>
+      </div>
+      <pre id="log">Waiting...</pre>
+    </main>
+
+    <script type="module" src="/tts-test.js"></script>
+    <script type="module">
+      const text = document.querySelector("#text");
+      const engine = document.querySelector("#engine");
+      const voice = document.querySelector("#voice");
+      const speak = document.querySelector("#speak");
+      const audio = document.querySelector("#audio");
+      const log = document.querySelector("#log");
+      let voiceLoadAttempts = 0;
+      let kokoro = null;
+
+      function write(message) {
+        log.textContent += `\n${new Date().toLocaleTimeString()} - ${message}`;
+        console.log(message);
+      }
+
+      function loadVoices() {
+        const voices = speechSynthesis.getVoices();
+        voice.replaceChildren();
+        for (const item of voices) {
+          const option = document.createElement("option");
+          option.value = item.voiceURI;
+          option.textContent = `${item.name} - ${item.lang}`;
+          voice.append(option);
+        }
+        const preferred =
+          voices.find((item) => item.lang.toLowerCase() === "en-us" && item.name.toLowerCase().includes("google")) ||
+          voices.find((item) => item.lang.toLowerCase() === "en-us") ||
+          voices.find((item) => item.lang.toLowerCase().startsWith("en"));
+        if (preferred) voice.value = preferred.voiceURI;
+        write(`SpeechSynthesis available: ${"speechSynthesis" in window}`);
+        write(`Voices found: ${voices.length}`);
+        return voices;
+      }
+
+      function loadVoicesWhenAvailable() {
+        const voices = loadVoices();
+        if (voices.length > 0 || voiceLoadAttempts >= 50) {
+          write(voices.length > 0 ? "Voice loading complete" : "No voices found after waiting");
+          return;
+        }
+        voiceLoadAttempts += 1;
+        window.setTimeout(loadVoicesWhenAvailable, 100);
+      }
+
+      function unlockSpeech() {
+        const utterance = new SpeechSynthesisUtterance("");
+        speechSynthesis.speak(utterance);
+        speechSynthesis.resume();
+      }
+
+      function writeString(view, offset, value) {
+        for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i));
+      }
+
+      function wavBlob(samplesLike, sampleRate) {
+        const samples = samplesLike instanceof Float32Array ? samplesLike : new Float32Array(samplesLike);
+        const dataBytes = samples.length * 2;
+        const buffer = new ArrayBuffer(44 + dataBytes);
+        const view = new DataView(buffer);
+        writeString(view, 0, "RIFF");
+        view.setUint32(4, 36 + dataBytes, true);
+        writeString(view, 8, "WAVE");
+        writeString(view, 12, "fmt ");
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, 1, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        writeString(view, 36, "data");
+        view.setUint32(40, dataBytes, true);
+        let offset = 44;
+        for (const sample of samples) {
+          const clamped = Math.max(-1, Math.min(1, sample));
+          view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+          offset += 2;
+        }
+        return new Blob([view], { type: "audio/wav" });
+      }
+
+      async function speakWithKokoro() {
+        const started = performance.now();
+        write("Loading Kokoro if needed...");
+        const { KokoroTTS } = await import("https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm");
+        kokoro ||= await KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-ONNX", {
+          device: "wasm",
+          dtype: "q8",
+        });
+        write(`Kokoro ready in ${((performance.now() - started) / 1000).toFixed(1)}s`);
+        const generatedAt = performance.now();
+        const output = await kokoro.generate(text.value.trim() || "Hello, this is a test.", { voice: "af_heart" });
+        const blob = output?.toBlob
+          ? await output.toBlob()
+          : wavBlob(output.audio ?? output, output.sampling_rate ?? 24000);
+        URL.revokeObjectURL(audio.src);
+        audio.src = URL.createObjectURL(blob);
+        write(`Kokoro generated in ${((performance.now() - generatedAt) / 1000).toFixed(1)}s`);
+        await audio.play();
+        write("Kokoro audio playing");
+      }
+
+      async function speakWithPiper() {
+        if (!window.piperTtsTest?.speak) {
+          write("Piper bundle is not loaded. Run this page through Vite, not python http.server.");
+          write("Use: npm install, then npm run dev");
+          return;
+        }
+        await window.piperTtsTest.speak({
+          text: text.value.trim() || "Hello, this is a test.",
+          audio,
+          write,
+        });
+      }
+
+      function showSupertonicInfo() {
+        write("Supertonic is not wired as a one-file CDN import in this test page.");
+        write("Open the Supertonic demo link above to test its browser app and compare load/generation time.");
+        write("Reason: Supertonic depends on its app assets/runtime files, not a simple predict() CDN API like Piper.");
+      }
+
+      speak.addEventListener("click", async () => {
+        log.textContent = "Clicked speak.";
+        if (engine.value === "kokoro") {
+          try {
+            await speakWithKokoro();
+          } catch (error) {
+            write(`Kokoro error: ${error.message || error}`);
+            console.error(error);
+          }
+          return;
+        }
+        if (engine.value === "piper") {
+          try {
+            await speakWithPiper();
+          } catch (error) {
+            write(`Piper error: ${error.message || error}`);
+            console.error(error);
+          }
+          return;
+        }
+        if (engine.value === "supertonic") {
+          showSupertonicInfo();
+          return;
+        }
+
+        if (!("speechSynthesis" in window)) {
+          write("SpeechSynthesis is not available in this browser.");
+          return;
+        }
+
+        unlockSpeech();
+        const voices = loadVoices();
+        const utterance = new SpeechSynthesisUtterance(text.value.trim() || "Hello, this is a test.");
+        const selected = voices.find((item) => item.voiceURI === voice.value);
+        if (selected) utterance.voice = selected;
+        utterance.lang = selected?.lang || "en-US";
+        utterance.rate = 1;
+        utterance.pitch = 1;
+
+        const resumeTimer = window.setInterval(() => speechSynthesis.resume(), 250);
+        utterance.onstart = () => write("TTS started");
+        utterance.onend = () => {
+          window.clearInterval(resumeTimer);
+          write("TTS ended");
+        };
+        utterance.onerror = (event) => {
+          window.clearInterval(resumeTimer);
+          write(`TTS error: ${event.error}`);
+          console.error("TTS error", event);
+        };
+
+        speechSynthesis.cancel();
+        speechSynthesis.speak(utterance);
+        speechSynthesis.resume();
+        write(`Requested voice: ${selected ? `${selected.name} / ${selected.lang}` : "default en-US"}`);
+      });
+
+      if ("speechSynthesis" in window) {
+        loadVoicesWhenAvailable();
+        speechSynthesis.addEventListener("voiceschanged", loadVoices);
+      } else {
+        write("SpeechSynthesis is not available in this browser.");
+      }
+    </script>
+  </body>
+</html>
