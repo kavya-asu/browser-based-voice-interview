@@ -11,6 +11,7 @@
   "dependencies": {
     "@mintplex-labs/piper-tts-web": "1.0.5",
     "canvas": "^3.2.3",
+    "formidable": "^3.5.4",
     "jszip": "^3.10.2",
     "mammoth": "^1.11.0",
     "pdf-parse": "^1.1.1",

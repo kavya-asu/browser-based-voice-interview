@@ -19,6 +19,19 @@ const generatedQuestions = document.querySelector("#generated-questions");
 const MAX_FILE_BYTES = 3 * 1024 * 1024;
 const ACCEPTED_EXTENSIONS = ["pdf", "docx", "pptx", "txt"];
 
+async function readApiResponse(response) {
+  const text = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    const detail = text.trim().slice(0, 300);
+    throw new Error(`Server returned a non-JSON response (${response.status}). ${detail || "Check the deployment function logs."}`);
+  }
+  if (!response.ok) throw new Error(payload.error || `Request failed (${response.status}).`);
+  return payload;
+}
+
 function setUploadState(message, kind = "") {
   uploadState.textContent = message;
   uploadState.className = `assignment-state ${kind}`.trim();
@@ -116,8 +129,7 @@ async function loadModels() {
   const previous = modelSelect.value;
   try {
     const response = await fetch("/api/models");
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Could not load LiteLLM models.");
+    const payload = await readApiResponse(response);
     modelSelect.replaceChildren();
     for (const model of payload.models) {
       const option = document.createElement("option");
@@ -181,18 +193,13 @@ async function generateQuestions() {
       formData.append("rubric", rubricFile);
     }
     formData.append("pdfMethod", pdfMethod);
+    if (modelSelect.value) formData.append("model", modelSelect.value);
 
-    const headers = {
-      "X-File-Name": encodeURIComponent(file.name),
-    };
-    if (modelSelect.value) headers["X-LiteLLM-Model"] = encodeURIComponent(modelSelect.value);
     const response = await fetch("/api/generate-questions", {
       method: "POST",
-      headers,
       body: formData,
     });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Question generation failed.");
+    const payload = await readApiResponse(response);
 
     // Show extraction preview
     showExtractionPreview(payload.extractedText, file.name.toLowerCase().endsWith(".pptx") ? "pptx" : payload.extractionMethod, payload.timing.extractionMs);
