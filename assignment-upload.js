@@ -2,29 +2,15 @@ const fileInput = document.querySelector("#assignment-file");
 const rubricFileInput = document.querySelector("#rubric-file");
 const pdfMethodInputs = document.querySelectorAll('input[name="pdf-method"]');
 const generateButton = document.querySelector("#generate-questions");
-const generateLocalButton = document.querySelector("#generate-questions-local");
-const generateWebLLMButton = document.querySelector("#generate-questions-webllm");
 const defaultButton = document.querySelector("#use-default-questions");
 const uploadState = document.querySelector("#assignment-state");
 const modelSelect = document.querySelector("#litellm-model");
-const webllmModelSelect = document.querySelector("#webllm-model");
 const refreshModelsButton = document.querySelector("#refresh-models");
 
 // Cloud timing stats
 const extractionMetric = document.querySelector("#stat-question-extraction");
 const modelMetric = document.querySelector("#stat-question-model");
 const totalMetric = document.querySelector("#stat-question-total");
-
-// Local timing stats
-const localExtractionMetric = document.querySelector("#stat-local-extraction");
-const localModelMetric = document.querySelector("#stat-local-model");
-const localTotalMetric = document.querySelector("#stat-local-total");
-
-// WebLLM timing stats
-const webllmExtractionMetric = document.querySelector("#stat-webllm-extraction");
-const webllmLoadMetric = document.querySelector("#stat-webllm-load");
-const webllmInferenceMetric = document.querySelector("#stat-webllm-inference");
-const webllmTotalMetric = document.querySelector("#stat-webllm-total");
 
 const questionPreview = document.querySelector("#question-preview");
 const questionPreviewMeta = document.querySelector("#question-preview-meta");
@@ -42,7 +28,7 @@ function formatMilliseconds(value) {
   return `${(value / 1000).toFixed(1)}s`;
 }
 
-function showGeneratedQuestions(questions, model, timing, source = "cloud") {
+function showGeneratedQuestions(questions, model, timing) {
   // Ensure we have valid data
   if (!Array.isArray(questions) || questions.length === 0) {
     console.warn("No questions to display");
@@ -66,8 +52,7 @@ function showGeneratedQuestions(questions, model, timing, source = "cloud") {
   }
   
   // Update metadata
-  const label = source === "local" ? `${model} (local)` : model;
-  questionPreviewMeta.textContent = `${label} generated these questions in ${formatMilliseconds(timing.totalMs)}.`;
+  questionPreviewMeta.textContent = `${model} generated these questions in ${formatMilliseconds(timing.totalMs)}.`;
   
   // Show the preview section
   questionPreview.hidden = false;
@@ -119,9 +104,6 @@ function setGenerating(generating) {
   rubricFileInput.disabled = generating;
   pdfMethodInputs.forEach(input => input.disabled = generating || !fileInput.files?.[0]?.name.toLowerCase().endsWith(".pdf"));
   generateButton.disabled = generating;
-  generateLocalButton.disabled = generating;
-  generateWebLLMButton.disabled = generating;
-  webllmModelSelect.disabled = generating;
   defaultButton.disabled = generating;
   refreshModelsButton.disabled = generating;
   window.dispatchEvent(new CustomEvent("assignment-generation-state", {
@@ -240,213 +222,6 @@ async function generateQuestions() {
   }
 }
 
-// ─── Local model generation (MiniCPM via Ollama) ──────────────────────────
-
-async function generateQuestionsLocal() {
-  const file = getValidatedFile();
-  const rubricFile = rubricFileInput.files?.[0];
-  const pdfMethod = document.querySelector('input[name="pdf-method"]:checked')?.value || "parser";
-  if (!file) return;
-
-  setGenerating(true);
-  clearGeneratedQuestions();
-  setUploadState("Reading assignment and generating questions (local MiniCPM)...", "busy");
-  localExtractionMetric.textContent = "running";
-  localModelMetric.textContent = "running";
-  localTotalMetric.textContent = "running";
-
-  try {
-    const formData = new FormData();
-    formData.append("assignment", file);
-    if (rubricFile) {
-      formData.append("rubric", rubricFile);
-    }
-    formData.append("pdfMethod", pdfMethod);
-
-    const headers = {
-      "X-File-Name": encodeURIComponent(file.name),
-    };
-    const response = await fetch("/api/generate-questions-local", {
-      method: "POST",
-      headers,
-      body: formData,
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Local question generation failed.");
-
-    // Show extraction preview
-    showExtractionPreview(payload.extractedText, file.name.toLowerCase().endsWith(".pptx") ? "pptx" : payload.extractionMethod, payload.timing.extractionMs);
-    
-    localExtractionMetric.textContent = formatMilliseconds(payload.timing.extractionMs);
-    localModelMetric.textContent = formatMilliseconds(payload.timing.modelMs);
-    localTotalMetric.textContent = formatMilliseconds(payload.timing.totalMs);
-    setUploadState(`Five questions ready using ${payload.model} (local).`, "ok");
-    showGeneratedQuestions(payload.questions, payload.model, payload.timing, "local");
-    window.dispatchEvent(new CustomEvent("assignment-questions-ready", {
-      detail: { questions: payload.questions, model: payload.model },
-    }));
-  } catch (error) {
-    localExtractionMetric.textContent = "failed";
-    localModelMetric.textContent = "failed";
-    localTotalMetric.textContent = "failed";
-    setUploadState(`${error.message} You can use the default questions instead.`, "error");
-  } finally {
-    setGenerating(false);
-  }
-}
-
-// ─── WebLLM generation (browser-side inference via WebGPU) ────────────────
-
-/** Cached engine instance — reused if the same model is loaded again. */
-let webllmEngine = null;
-let webllmLoadedModel = null;
-
-function parseQuestionsWebLLM(content) {
-  const raw = typeof content === "string" ? content : "";
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-  const firstBrace = cleaned.indexOf("{");
-  const lastBrace = cleaned.lastIndexOf("}");
-  if (firstBrace < 0 || lastBrace <= firstBrace) {
-    throw new Error("WebLLM did not return JSON questions.");
-  }
-  const parsed = JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
-  const questions = parsed.questions
-    ?.map((q) => String(q).trim())
-    .filter(Boolean);
-  if (!Array.isArray(questions) || questions.length !== 3) {
-    throw new Error("WebLLM must return exactly three questions.");
-  }
-  return questions;
-}
-
-async function generateQuestionsWebLLM() {
-  const file = getValidatedFile();
-  if (!file) return;
-
-  if (!navigator.gpu) {
-    setUploadState(
-      "WebGPU is not available in this browser. Try Chrome 113+ on desktop.",
-      "error",
-    );
-    return;
-  }
-
-  const selectedModel = webllmModelSelect.value;
-  const totalStarted = performance.now();
-
-  setGenerating(true);
-  clearGeneratedQuestions();
-  setUploadState("Extracting assignment text…", "busy");
-  webllmExtractionMetric.textContent = "running";
-  webllmLoadMetric.textContent = "—";
-  webllmInferenceMetric.textContent = "—";
-  webllmTotalMetric.textContent = "running";
-
-  try {
-    // ── Step 1: extract text server-side ──────────────────────────────────
-    const headers = {
-      "Content-Type": file.type || "application/octet-stream",
-      "X-File-Name": encodeURIComponent(file.name),
-    };
-    const extractResponse = await fetch("/api/extract-text", {
-      method: "POST",
-      headers,
-      body: file,
-    });
-    const extractPayload = await extractResponse.json();
-    if (!extractResponse.ok) {
-      throw new Error(extractPayload.error || "Text extraction failed.");
-    }
-    const { text: assignmentText, timing: extractTiming } = extractPayload;
-    webllmExtractionMetric.textContent = formatMilliseconds(extractTiming.extractionMs);
-
-    // ── Step 2: load WebLLM engine (or reuse cached) ──────────────────────
-    const webllm = await import("https://esm.run/@mlc-ai/web-llm");
-
-    let loadMs = 0;
-    if (webllmEngine && webllmLoadedModel === selectedModel) {
-      setUploadState(`Model ${selectedModel} already loaded. Running inference…`, "busy");
-      webllmLoadMetric.textContent = "cached";
-    } else {
-      setUploadState(`Loading ${selectedModel} into browser (first load may take a while)…`, "busy");
-      webllmLoadMetric.textContent = "loading…";
-      const loadStarted = performance.now();
-
-      // Unload previous engine if a different model was cached
-      if (webllmEngine) {
-        await webllmEngine.unload();
-        webllmEngine = null;
-        webllmLoadedModel = null;
-      }
-
-      webllmEngine = await webllm.CreateMLCEngine(selectedModel, {
-        initProgressCallback: (progress) => {
-          const pct = progress.progress != null
-            ? ` (${Math.round(progress.progress * 100)}%)`
-            : "";
-          setUploadState(
-            `Loading ${selectedModel}${pct} — ${progress.text ?? ""}`,
-            "busy",
-          );
-        },
-      });
-      webllmLoadedModel = selectedModel;
-      loadMs = Math.round(performance.now() - loadStarted);
-      webllmLoadMetric.textContent = formatMilliseconds(loadMs);
-    }
-
-    // ── Step 3: run inference with the same question-generation prompt ─────
-    const { QUESTION_SYSTEM_PROMPT, buildQuestionPrompt } = await import(
-      "./lib/question-prompt.js"
-    );
-
-    setUploadState("Running inference with WebLLM…", "busy");
-    webllmInferenceMetric.textContent = "running";
-    const inferenceStarted = performance.now();
-
-    const completion = await webllmEngine.chat.completions.create({
-      messages: [
-        { role: "system", content: QUESTION_SYSTEM_PROMPT },
-        { role: "user", content: buildQuestionPrompt(assignmentText) },
-      ],
-      temperature: 0.25,
-      max_tokens: 500,
-    });
-
-    const inferenceMs = Math.round(performance.now() - inferenceStarted);
-    webllmInferenceMetric.textContent = formatMilliseconds(inferenceMs);
-
-    const rawContent = completion.choices?.[0]?.message?.content ?? "";
-    const questions = parseQuestionsWebLLM(rawContent);
-    const totalMs = Math.round(performance.now() - totalStarted);
-    webllmTotalMetric.textContent = formatMilliseconds(totalMs);
-
-    const timing = { extractionMs: extractTiming.extractionMs, inferenceMs, totalMs };
-    setUploadState(`Five questions ready using ${selectedModel} (WebLLM).`, "ok");
-    showGeneratedQuestions(questions, selectedModel, { totalMs }, "webllm");
-    window.dispatchEvent(new CustomEvent("assignment-questions-ready", {
-      detail: { questions, model: selectedModel },
-    }));
-  } catch (error) {
-    webllmExtractionMetric.textContent =
-      webllmExtractionMetric.textContent === "running" ? "failed" : webllmExtractionMetric.textContent;
-    webllmLoadMetric.textContent =
-      webllmLoadMetric.textContent === "loading…" ? "failed" : webllmLoadMetric.textContent;
-    webllmInferenceMetric.textContent =
-      webllmInferenceMetric.textContent === "running" ? "failed" : webllmInferenceMetric.textContent;
-    webllmTotalMetric.textContent = "failed";
-    setUploadState(`${error.message} You can use the default questions instead.`, "error");
-    // If the engine is in a broken state, clear it so the next attempt reloads
-    if (webllmEngine) {
-      try { await webllmEngine.unload(); } catch (_) { /* ignore */ }
-      webllmEngine = null;
-      webllmLoadedModel = null;
-    }
-  } finally {
-    setGenerating(false);
-  }
-}
-
 // ─── Event listeners ──────────────────────────────────────────────────────
 
 function updateFileSelectionState() {
@@ -473,8 +248,6 @@ pdfMethodInputs.forEach(input => {
 });
 
 generateButton.addEventListener("click", generateQuestions);
-generateLocalButton.addEventListener("click", generateQuestionsLocal);
-generateWebLLMButton.addEventListener("click", generateQuestionsWebLLM);
 
 defaultButton.addEventListener("click", () => {
   extractionMetric.textContent = "0.0s";

@@ -54,22 +54,6 @@
             </label>
 
             <button id="generate-questions" type="button">Generate questions (Cloud)</button>
-            <button id="generate-questions-local" class="secondary-button" type="button" title="Run MiniCPM-o 2.6 via Ollama on your machine">Generate questions (Local MiniCPM)</button>
-            <label>
-              WebLLM model
-              <select id="webllm-model">
-                <option value="Llama-3.2-1B-Instruct-q4f32_1-MLC">Llama 3.2 1B (q4f32) · ~700 MB</option>
-                <option value="Llama-3.2-3B-Instruct-q4f16_1-MLC">Llama 3.2 3B (q4f16) · ~1.8 GB</option>
-                <option value="Phi-3.5-mini-instruct-q4f16_1-MLC">Phi-3.5 mini (q4f16) · ~2.2 GB</option>
-                <option value="Phi-3-mini-4k-instruct-q4f16_1-MLC">Phi-3 mini 4k (q4f16) · ~2.2 GB</option>
-                <option value="gemma-2-2b-it-q4f16_1-MLC">Gemma 2 2B (q4f16) · ~1.5 GB</option>
-                <option value="Qwen2.5-1.5B-Instruct-q4f16_1-MLC">Qwen 2.5 1.5B (q4f16) · ~1 GB</option>
-                <option value="Qwen2.5-3B-Instruct-q4f16_1-MLC">Qwen 2.5 3B (q4f16) · ~1.9 GB</option>
-                <option value="SmolLM2-1.7B-Instruct-q4f16_1-MLC">SmolLM2 1.7B (q4f16) · ~1 GB</option>
-                <option value="Mistral-7B-Instruct-v0.3-q4f16_1-MLC">Mistral 7B v0.3 (q4f16) · ~4 GB</option>
-              </select>
-            </label>
-            <button id="generate-questions-webllm" class="secondary-button" type="button" title="Run inference in the browser via WebGPU — no cloud required">Generate questions (WebLLM)</button>
             <button id="use-default-questions" class="secondary-button" type="button">Use defaults</button>
           </div>
         </section>
@@ -140,13 +124,6 @@
                 <div><dt>Cloud extraction</dt><dd id="stat-question-extraction">0.0s</dd></div>
                 <div><dt>Cloud model</dt><dd id="stat-question-model">0.0s</dd></div>
                 <div><dt>Cloud total</dt><dd id="stat-question-total">0.0s</dd></div>
-                <div><dt>Local extraction</dt><dd id="stat-local-extraction">—</dd></div>
-                <div><dt>Local model</dt><dd id="stat-local-model">—</dd></div>
-                <div><dt>Local total</dt><dd id="stat-local-total">—</dd></div>
-                <div><dt>WebLLM extraction</dt><dd id="stat-webllm-extraction">—</dd></div>
-                <div><dt>WebLLM model load</dt><dd id="stat-webllm-load">—</dd></div>
-                <div><dt>WebLLM inference</dt><dd id="stat-webllm-inference">—</dd></div>
-                <div><dt>WebLLM total</dt><dd id="stat-webllm-total">—</dd></div>
               </dl>
             </section>
 

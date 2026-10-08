@@ -1,8 +1,6 @@
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createViteServer, loadEnv } from "vite";
 import generateQuestions from "./api/generate-questions.js";
-import generateQuestionsLocal from "./api/generate-questions-local.js";
-import extractText from "./api/extract-text.js";
 import listModels from "./api/models.js";
 
 const port = Number(process.env.PORT || 7861);
@@ -36,14 +34,6 @@ const server = createHttpServer(async (request, response) => {
     }
     if (pathname === "/api/generate-questions") {
       await generateQuestions(request, prepareResponse(response));
-      return;
-    }
-    if (pathname === "/api/generate-questions-local") {
-      await generateQuestionsLocal(request, prepareResponse(response));
-      return;
-    }
-    if (pathname === "/api/extract-text") {
-      await extractText(request, prepareResponse(response));
       return;
     }
     vite.middlewares(request, response);
