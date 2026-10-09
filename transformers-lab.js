@@ -929,9 +929,6 @@ window.addEventListener("assignment-questions-ready", (event) => {
     interviewQuestions = questions;
   }
 });
-window.addEventListener("assignment-use-default-questions", () => {
-  interviewQuestions = [...DEFAULT_INTERVIEW_QUESTIONS];
-});
 ttsEngine.addEventListener("change", syncTtsSettings);
 sttModel.addEventListener("change", updateSettingsWarning);
 runtime.addEventListener("change", updateSettingsWarning);

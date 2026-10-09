@@ -1,8 +1,6 @@
 const fileInput = document.querySelector("#assignment-file");
 const rubricFileInput = document.querySelector("#rubric-file");
-const pdfMethodInputs = document.querySelectorAll('input[name="pdf-method"]');
 const generateButton = document.querySelector("#generate-questions");
-const defaultButton = document.querySelector("#use-default-questions");
 const uploadState = document.querySelector("#assignment-state");
 const modelSelect = document.querySelector("#litellm-model");
 const refreshModelsButton = document.querySelector("#refresh-models");
@@ -75,6 +73,8 @@ function clearGeneratedQuestions() {
   generatedQuestions.replaceChildren();
   questionPreviewMeta.textContent = "";
   questionPreview.hidden = true;
+  document.getElementById("extraction-preview").open = false;
+  document.getElementById("extraction-preview").hidden = true;
 }
 
 // Function to show text extraction preview
@@ -115,9 +115,7 @@ function showExtractionPreview(text, method, extractionTime) {
 function setGenerating(generating) {
   fileInput.disabled = generating;
   rubricFileInput.disabled = generating;
-  pdfMethodInputs.forEach(input => input.disabled = generating || !fileInput.files?.[0]?.name.toLowerCase().endsWith(".pdf"));
   generateButton.disabled = generating;
-  defaultButton.disabled = generating;
   refreshModelsButton.disabled = generating;
   window.dispatchEvent(new CustomEvent("assignment-generation-state", {
     detail: { generating },
@@ -146,7 +144,7 @@ async function loadModels() {
       modelSelect.append(option);
     }
   } catch (error) {
-    setUploadState(`${error.message} Default questions are still available.`, "error");
+    setUploadState(error.message, "error");
   } finally {
     refreshModelsButton.disabled = false;
   }
@@ -176,7 +174,6 @@ function getValidatedFile() {
 async function generateQuestions() {
   const file = getValidatedFile();
   const rubricFile = rubricFileInput.files?.[0];
-  const pdfMethod = document.querySelector('input[name="pdf-method"]:checked')?.value || "parser";
   if (!file) return;
 
   setGenerating(true);
@@ -192,7 +189,7 @@ async function generateQuestions() {
     if (rubricFile) {
       formData.append("rubric", rubricFile);
     }
-    formData.append("pdfMethod", pdfMethod);
+    formData.append("pdfMethod", "parser");
     if (modelSelect.value) formData.append("model", modelSelect.value);
 
     const response = await fetch("/api/generate-questions", {
@@ -221,9 +218,9 @@ async function generateQuestions() {
     let errorMessage = error.message;
     if (errorMessage.includes("AI extraction") || errorMessage.includes("image format") || 
         errorMessage.includes("Unsupported image format")) {
-      errorMessage = `AI PDF extraction failed. Your current model doesn't support PDF files directly. Try switching to 'PDF Parser' method for reliable PDF text extraction. Original error: ${errorMessage}`;
+      errorMessage = `PDF extraction failed. Original error: ${errorMessage}`;
     }
-    setUploadState(`${errorMessage} You can use the default questions instead.`, "error");
+    setUploadState(errorMessage, "error");
   } finally {
     setGenerating(false);
   }
@@ -234,36 +231,17 @@ async function generateQuestions() {
 function updateFileSelectionState() {
   const file = fileInput.files?.[0];
   const rubricFile = rubricFileInput.files?.[0];
-  const pdfMethod = document.querySelector('input[name="pdf-method"]:checked')?.value || "parser";
-  pdfMethodInputs.forEach(input => input.disabled = !file?.name.toLowerCase().endsWith(".pdf"));
   if (file) {
-    const method = file.name.toLowerCase().endsWith(".pdf")
-      ? ` using ${pdfMethod === "ai" ? "AI" : "PDF parser"} extraction`
-      : file.name.toLowerCase().endsWith(".pptx") ? " using PPTX text extraction" : "";
-    setUploadState(`${file.name} selected${rubricFile ? ` with ${rubricFile.name}` : ""}${method}. Generate questions when ready.`);
+    setUploadState(`${file.name} selected${rubricFile ? ` with ${rubricFile.name}` : ""}. Generate questions when ready.`);
   } else {
-    setUploadState("Default questions are ready.");
+    setUploadState("Upload an assignment to generate questions.");
   }
 }
 
 fileInput.addEventListener("change", updateFileSelectionState);
 rubricFileInput.addEventListener("change", updateFileSelectionState);
 
-// Add event listener for PDF method changes
-pdfMethodInputs.forEach(input => {
-  input.addEventListener("change", updateFileSelectionState);
-});
-
 generateButton.addEventListener("click", generateQuestions);
-
-defaultButton.addEventListener("click", () => {
-  extractionMetric.textContent = "0.0s";
-  modelMetric.textContent = "0.0s";
-  totalMetric.textContent = "0.0s";
-  clearGeneratedQuestions();
-  setUploadState("Using the default interview questions.", "ok");
-  window.dispatchEvent(new CustomEvent("assignment-use-default-questions"));
-});
 
 refreshModelsButton.addEventListener("click", loadModels);
 

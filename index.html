@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Oral Assessment POC</title>
+    <title>Interactive Oral Assessment PoC -Validation Gate 2 (IOA-VG2)</title>
     <link rel="stylesheet" href="transformers-lab.css" />
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/bundle.min.js"></script>
@@ -12,14 +12,14 @@
     <main class="app">
       <section class="voice-panel" aria-label="Browser voice interview">
         <header class="page-header">
-          <h1>Oral Assessment POC</h1>
-          <p class="preamble">Upload an assignment to generate tailored questions, or continue with the default interview. Then prepare the microphone and start when ready.</p>
+          <h1>Interactive Oral Assessment PoC -Validation Gate 2 (IOA-VG2)</h1>
+          <p class="preamble">Upload an assignment to generate tailored questions. Then prepare the microphone and start the interview when ready.</p>
         </header>
 
         <section class="assignment-panel" aria-labelledby="assignment-heading">
           <div>
             <h2 id="assignment-heading">Assignment questions</h2>
-            <p id="assignment-state" class="assignment-state">Default questions are ready.</p>
+            <p id="assignment-state" class="assignment-state">Upload an assignment to generate questions.</p>
           </div>
           <div class="assignment-actions">
             <label class="file-picker">
@@ -31,19 +31,6 @@
               <input id="rubric-file" type="file" accept=".pdf,.docx,.pptx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain" />
             </label>
             <label>
-              <span>PDF Processing Method (PDF assignments only)</span>
-              <div class="pdf-method-toggle">
-                <label class="toggle-option" title="Fast PDF parsing using built-in text extractor">
-                  <input type="radio" name="pdf-method" value="parser" checked>
-                  PDF Parser (Fast)
-                </label>
-                <label class="toggle-option" title="Use AI model for document processing (may not work with all models)">
-                  <input type="radio" name="pdf-method" value="ai">
-                  AI Extraction (Smart)
-                </label>
-              </div>
-            </label>
-            <label>
               LiteLLM model
               <span class="inline-control">
                 <select id="litellm-model">
@@ -53,8 +40,7 @@
               </span>
             </label>
 
-            <button id="generate-questions" type="button">Generate questions (Cloud)</button>
-            <button id="use-default-questions" class="secondary-button" type="button">Use defaults</button>
+            <button id="generate-questions" type="button">Generate questions</button>
           </div>
         </section>
 
@@ -99,15 +85,14 @@
               </div>
               <p id="question-preview-meta" class="question-preview-meta"></p>
               
-              <!-- Text Extraction Preview -->
-              <div id="extraction-preview" class="extraction-preview" hidden>
-                <h3>Text Extraction Preview</h3>
+              <details id="extraction-preview" class="extraction-preview" hidden>
+                <summary>View extracted document text</summary>
                 <div class="info-bar">
                   <span id="extraction-method" class="badge"></span>
                   <span id="extraction-stats" class="stats"></span>
                 </div>
                 <textarea id="extracted-text-preview" readonly rows="6" placeholder="Extracted text will appear here..."></textarea>
-              </div>
+              </details>
               
               <ol id="generated-questions"></ol>
             </section>
